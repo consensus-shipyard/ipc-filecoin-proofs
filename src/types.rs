@@ -176,6 +176,14 @@ impl From<Cid> for CIDMap {
     }
 }
 
+impl From<&str> for CIDMap {
+    fn from(cid: &str) -> Self {
+        Self {
+            cid: cid.to_string(),
+        }
+    }
+}
+
 impl TryFrom<&CIDMap> for Cid {
     type Error = anyhow::Error;
 

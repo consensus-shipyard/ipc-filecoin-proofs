@@ -22,52 +22,6 @@ use crate::types::{
     ReceiptSubmission,
 };
 
-async fn fetch_tipset_by_height_with_retry(
-    client: &LotusClient,
-    height: i64,
-) -> Result<GetTipSetByHeightResponse> {
-    let mut attempts = 0;
-    loop {
-        match client.get_tipset_by_height(height, None).await {
-            Ok(ts) => return Ok(ts),
-            Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("tipset height in future") && attempts < 15 {
-                    attempts += 1;
-                    sleep(Duration::from_secs(2)).await;
-                    continue;
-                }
-                return Err(e);
-            }
-        }
-    }
-}
-
-async fn fetch_tipset_by_height_with_base_retry(
-    client: &LotusClient,
-    height: i64,
-    base: Vec<Cid>,
-) -> Result<GetTipSetByHeightResponse> {
-    let mut attempts = 0;
-    loop {
-        match client
-            .get_tipset_by_height(height, Some(base.clone()))
-            .await
-        {
-            Ok(ts) => return Ok(ts),
-            Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("tipset height in future") && attempts < 15 {
-                    attempts += 1;
-                    sleep(Duration::from_secs(2)).await;
-                    continue;
-                }
-                return Err(e);
-            }
-        }
-    }
-}
-
 // On-chain AMT leaf for ParentMessageReceipts is a CBOR tuple (exit_code, return_data, gas_used).
 type AmtReceipt = (i64, Vec<u8>, u64);
 
