@@ -164,57 +164,52 @@ pub struct EvmLog {
     pub data: Vec<u8>,
 }
 
-pub fn evm_log_from_actor_event(ev: &ActorEvent) -> Option<EvmLog> {
-    // First pass: collect entries
-    let mut data: Vec<u8> = Vec::new();
-    let mut topics_chunks: Option<Vec<[u8; 32]>> = None;
-    let mut tn_topics: Vec<(u32, [u8; 32])> = Vec::new();
-
-    for Entry { key, value, .. } in &ev.entries {
-        match key.as_str() {
-            "data" | "d" => {
-                data = value.clone();
-            }
-            "topics" => {
-                // fallback shape: a single blob with 32*N bytes
-                if value.len() % 32 != 0 {
-                    return None;
-                }
-                let mut t = Vec::with_capacity(value.len() / 32);
-                for chunk in value.chunks(32) {
-                    let mut x = [0u8; 32];
-                    x.copy_from_slice(chunk);
-                    t.push(x);
-                }
-                topics_chunks = Some(t);
-            }
-            _ if key.starts_with('t') => {
-                // FEVM shape: keys like "t1","t2","t3",...
-                if let Ok(n) = key[1..].parse::<u32>() {
-                    if value.len() == 32 {
-                        let mut x = [0u8; 32];
-                        x.copy_from_slice(value);
-                        tn_topics.push((n, x));
-                    } else {
-                        // Topics must be exactly 32 bytes
-                        return None;
-                    }
-                }
-            }
-            _ => {}
-        }
+pub fn evm_log_from_actor_event(ev: &fvm_shared::event::ActorEvent) -> Option<EvmLog> {
+    use std::collections::HashMap;
+    let mut m = HashMap::<&str, &[u8]>::new();
+    for e in &ev.entries {
+        m.insert(e.key.as_str(), e.value.as_slice());
     }
 
-    let topics = if let Some(t) = topics_chunks {
-        t
-    } else {
-        if tn_topics.is_empty() {
+    // Case A: explicit concatenated topics + data
+    if let Some(topics_bytes) = m.get("topics").copied() {
+        if topics_bytes.len() % 32 != 0 {
             return None;
         }
-        tn_topics.sort_by_key(|(n, _)| *n); // ensure t1,t2,t3 order
-        tn_topics.into_iter().map(|(_, x)| x).collect()
-    };
+        let topics = topics_bytes
+            .chunks(32)
+            .map(|c| <[u8; 32]>::try_from(c).unwrap())
+            .collect::<Vec<_>>();
+        let data = m.get("data").cloned().unwrap_or_default().to_vec();
+        return Some(EvmLog { topics, data });
+    }
 
+    // Case B: compact t1,t2,... plus d
+    let mut topics = Vec::<[u8; 32]>::new();
+    // t1 is the event signature hash
+    let mut i = 1usize;
+    loop {
+        let key = match i {
+            1 => "t1",
+            2 => "t2",
+            3 => "t3",
+            4 => "t4",
+            _ => break,
+        };
+        if let Some(val) = m.get(key).copied() {
+            if val.len() != 32 {
+                return None;
+            }
+            topics.push(<[u8; 32]>::try_from(val).ok()?);
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if topics.is_empty() {
+        return None;
+    }
+    let data = m.get("d").cloned().unwrap_or_default().to_vec();
     Some(EvmLog { topics, data })
 }
 
@@ -385,13 +380,31 @@ struct HeaderLite {
     _parent_base_fee: IgnoredAny, // 15
 }
 
+pub fn make_check_event_evm(
+    event_sig: &str,
+    subnet_id: &str,
+) -> impl Fn(&fvm_shared::event::ActorEvent) -> bool {
+    let t0: [u8; 32] = keccak_event_sig(event_sig);
+    let t1: [u8; 32] = bytes32_from_ascii(subnet_id);
+    move |ev| {
+        if let Some(log) = evm_log_from_actor_event(ev) {
+            if log.topics.len() < 2 {
+                return false;
+            }
+            // topics[0] == hash(sig), topics[1] == bytes32(subnetId)
+            log.topics[0] == t0 && log.topics[1] == t1
+        } else {
+            false
+        }
+    }
+}
 pub fn verify_bundle_offline(
     bundle: &ProofBundle,
     // Trust anchors: the caller must assert these headers are finalized.
     is_trusted_parent_ts: &dyn Fn(i64, &[Cid]) -> bool,
     is_trusted_child_header: &dyn Fn(i64, &Cid) -> bool,
     // Optional semantic check on the event contents
-    check_event: Option<&dyn Fn(&StampedEvent) -> bool>,
+    check_event: Option<&dyn Fn(&ActorEvent) -> bool>,
 ) -> Result<Vec<bool>> {
     println!("Verifying bundle offline");
     // Load bundle blocks into an isolated store
@@ -502,7 +515,7 @@ pub fn verify_bundle_offline(
         };
 
         if let Some(pred) = check_event {
-            if !pred(se) {
+            if !pred(&se.event) {
                 results.push(false);
                 continue;
             }

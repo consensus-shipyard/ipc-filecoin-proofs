@@ -19,7 +19,7 @@ use fvm_ipld_encoding::RawBytes;
 use fvm_shared::error::ExitCode;
 use fvm_shared::receipt::Receipt as MessageReceipt;
 // use fvm_shared::event::
-use proofs::{generate_bundle_for_subnet, verify_bundle_offline};
+use proofs::{generate_bundle_for_subnet, make_check_event_evm, verify_bundle_offline};
 
 // Lotus JSON types for RPC communication
 #[derive(Debug, Deserialize, Clone)]
@@ -260,181 +260,20 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
+    // TODO: add real trusted parent ts and child header - this should use the verified F3 certificate
     let is_trusted_parent_ts = |_: i64, _: &[Cid]| true;
     let is_trusted_child_header = |_: i64, _: &Cid| true;
+
+    let check_event = make_check_event_evm("NewTopDownMessage(bytes32,uint256)", "calib-subnet-1");
 
     let res = verify_bundle_offline(
         &proof_bundle,
         &is_trusted_parent_ts,
         &is_trusted_child_header,
-        None,
+        Some(&check_event),
     )?;
 
     println!("Verification Result: {:?}", res);
 
-    return Ok(());
-
-    let certificate = create_mock_finality_certificate();
-
-    println!("Mock Finality Certificate: {:?}", certificate);
-
-    // Get tipset CIDs from the finality certificate
-    // Test ChainGetTipSet using the tipset CID from the finality certificate
-    let tipset_cids = certificate
-        .ec_chain
-        .first()
-        .unwrap()
-        .key
-        .as_slice()
-        .iter()
-        .map(|cid_map| CIDMap::from(cid_map.cid.as_str()))
-        .collect::<Vec<_>>();
-
-    println!("Getting tipset for CIDs: {:?}", tipset_cids);
-
-    let tipset = client
-        .request::<ApiTipset>("Filecoin.ChainGetTipSet", json!([tipset_cids]))
-        .await?;
-
-    println!("ChainGetTipSet response: {:?}", tipset);
-
-    // Get receipts root (same for all blocks in tipset - they share the same parent)
-    let receipts = get_parent_receipts(&client, &tipset.cids[0].cid).await?;
-    let root = build_receipts_amt(&receipts)?;
-    println!("Rebuilt receipts root: {}", root);
-    assert_eq!(
-        root.to_string(),
-        tipset.blocks[0].parent_message_receipts.cid
-    );
-    println!(
-        "Receipts CID: {}",
-        tipset.blocks[0].parent_message_receipts.cid
-    );
-
-    // Process all blocks in the tipset for messages
-    for (block_index, block) in tipset.blocks.iter().enumerate() {
-        println!("\n=== Processing Block {} ===", block_index);
-        println!("Block CID: {}", tipset.cids[block_index].cid);
-
-        // Get block messages
-        let block_messages = get_block_messages(&client, &tipset.cids[block_index].cid).await?;
-        println!(
-            "Block messages: {} BLS, {} SECP",
-            block_messages.bls_msg.len(),
-            block_messages.secp_msg.len()
-        );
-
-        // Rebuild messages AMT (TxMeta)
-        let txmeta_cid = build_txmeta_cid(block_messages).await?;
-        println!("Rebuilt TxMeta CID: {}", txmeta_cid);
-
-        // Verify the TxMeta CID matches the block's messages
-        assert_eq!(txmeta_cid.to_string(), block.messages.cid);
-        println!("Messages CID: {}", block.messages.cid);
-
-        assert_eq!(txmeta_cid.to_string(), block.messages.cid);
-    }
-
     Ok(())
-}
-
-async fn get_block_messages(
-    client: &LotusClient,
-    block_cid: &str,
-) -> anyhow::Result<BlockMessages> {
-    let block_messages = client
-        .request::<BlockMessages>(
-            "Filecoin.ChainGetBlockMessages",
-            json!([CIDMap::from(block_cid)]),
-        )
-        .await?;
-
-    Ok(block_messages)
-}
-
-async fn get_parent_receipts(
-    client: &LotusClient,
-    block_cid: &str,
-) -> anyhow::Result<Vec<MessageReceipt>> {
-    let r = client
-        .request::<Vec<ApiReceipt>>(
-            "Filecoin.ChainGetParentReceipts",
-            json!([CIDMap::from(block_cid)]),
-        )
-        .await?;
-
-    // Convert ApiReceipt to FVM Receipt for proper AMT operations
-    let message_receipts: Vec<MessageReceipt> =
-        r.iter().map(|r| MessageReceipt::from(r.clone())).collect();
-
-    Ok(message_receipts)
-}
-
-fn build_receipts_amt(receipts: &[MessageReceipt]) -> anyhow::Result<Cid> {
-    let bs = MemoryBlockstore::new();
-
-    let mut a = Amt::<MessageReceipt, _>::new(bs);
-    for (i, r) in receipts.iter().cloned().enumerate() {
-        a.set(i as u64, r)?;
-    }
-    let root = a.flush()?;
-    Ok(root)
-}
-
-// Pull a CID from either the outer "CID" or the inner "Message.CID"
-fn pick_cid(m: &MsgWithCid) -> anyhow::Result<Cid> {
-    let s = m
-        .cid
-        .as_ref()
-        .map(|c| c.cid.as_str())
-        .or_else(|| Some(m.message.as_ref()?.cid.cid.as_str()))
-        .ok_or_else(|| anyhow::anyhow!("no CID present on message"))?;
-    Ok(Cid::try_from(s)?)
-}
-
-async fn build_txmeta_cid(bm: BlockMessages) -> anyhow::Result<Cid> {
-    // 1) Extract CIDs in-order per list
-    let bls_cids: Vec<Cid> = bm
-        .bls_msg
-        .iter()
-        .map(|m| {
-            let msg_with_cid = MsgWithCid {
-                cid: None,
-                message: Some(m.clone()),
-            };
-            pick_cid(&msg_with_cid)
-        })
-        .collect::<anyhow::Result<_>>()?;
-
-    let secp_cids: Vec<Cid> = bm
-        .secp_msg
-        .iter()
-        .map(|sm| {
-            let msg_with_cid = MsgWithCid {
-                cid: Some(sm.cid.clone()),
-                message: Some(sm.message.clone()),
-            };
-            pick_cid(&msg_with_cid)
-        })
-        .collect::<anyhow::Result<_>>()?;
-
-    // 2) Build AMT v0 arrays of CIDs
-    let bs = MemoryBlockstore::new();
-
-    let mut bls_amt = Amt::<Cid, _>::new(&bs);
-    for (i, c) in bls_cids.into_iter().enumerate() {
-        bls_amt.set(i as u64, c)?;
-    }
-    let bls_root = bls_amt.flush()?;
-
-    let mut secp_amt = Amt::<Cid, _>::new(&bs);
-    for (i, c) in secp_cids.into_iter().enumerate() {
-        secp_amt.set(i as u64, c)?;
-    }
-    let secp_root = secp_amt.flush()?;
-
-    // 3) Encode TxMeta as DAG-CBOR 2-tuple and get its CID (blake2b-256)
-    let txmeta = TxMeta(bls_root, secp_root);
-    let txmeta_cid = bs.put_cbor(&txmeta, multihash_codetable::Code::Blake2b256)?;
-    Ok(txmeta_cid)
 }
