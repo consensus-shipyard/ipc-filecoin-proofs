@@ -1,6 +1,7 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: MIT
 mod client;
+mod proofs;
 mod types;
 
 use crate::client::LotusClient;
@@ -18,6 +19,7 @@ use fvm_ipld_encoding::RawBytes;
 use fvm_shared::error::ExitCode;
 use fvm_shared::receipt::Receipt as MessageReceipt;
 // use fvm_shared::event::
+use proofs::{generate_bundle_for_subnet, verify_bundle_offline};
 
 // Lotus JSON types for RPC communication
 #[derive(Debug, Deserialize, Clone)]
@@ -240,6 +242,38 @@ async fn main() -> anyhow::Result<()> {
         None,
     );
 
+    let H = 2980106;
+
+    let parent: ApiTipset = client
+        .request("Filecoin.ChainGetTipSetByHeight", json!([H, null]))
+        .await?;
+    let child: ApiTipset = client
+        .request("Filecoin.ChainGetTipSetByHeight", json!([H + 1, null]))
+        .await?;
+
+    let proof_bundle = generate_bundle_for_subnet(
+        &client,
+        &parent,
+        &child,
+        "NewTopDownMessage(bytes32,uint256)",
+        "calib-subnet-1",
+    )
+    .await?;
+
+    let is_trusted_parent_ts = |_: i64, _: &[Cid]| true;
+    let is_trusted_child_header = |_: i64, _: &Cid| true;
+
+    let res = verify_bundle_offline(
+        &proof_bundle,
+        &is_trusted_parent_ts,
+        &is_trusted_child_header,
+        None,
+    )?;
+
+    println!("Verification Result: {:?}", res);
+
+    return Ok(());
+
     let certificate = create_mock_finality_certificate();
 
     println!("Mock Finality Certificate: {:?}", certificate);
@@ -403,12 +437,4 @@ async fn build_txmeta_cid(bm: BlockMessages) -> anyhow::Result<Cid> {
     let txmeta = TxMeta(bls_root, secp_root);
     let txmeta_cid = bs.put_cbor(&txmeta, multihash_codetable::Code::Blake2b256)?;
     Ok(txmeta_cid)
-}
-
-// If you want the AMT path "digits" (child indexes) for a particular entry:
-fn amt_path_digits(index: u64, bit_width: u32, height: u32) -> Vec<u32> {
-    let mask = (1u64 << bit_width) - 1;
-    (0..height)
-        .map(|lvl| ((index >> (lvl * bit_width)) & mask) as u32)
-        .collect()
 }
