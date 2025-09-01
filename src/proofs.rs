@@ -22,8 +22,7 @@ use serde_tuple::Deserialize_tuple;
 use tiny_keccak::{Hasher, Keccak};
 
 use crate::client::LotusClient;
-use crate::types::CIDMap;
-use crate::ApiTipset;
+use crate::types::{ApiReceipt, ApiTipset, CIDMap};
 
 // ---------- Proof bundle format ----------
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -294,7 +293,7 @@ pub async fn generate_bundle_for_subnet(
     let r_amt = Amtv0::<MessageReceipt, _>::load(&receipts_root, &rec_receipts)?;
 
     let rpcs = client
-        .request::<Vec<crate::ApiReceipt>>(
+        .request::<Vec<ApiReceipt>>(
             "Filecoin.ChainGetParentReceipts",
             serde_json::json!([CIDMap::from(child_cid.to_string().as_str())]),
         )
@@ -406,7 +405,6 @@ pub fn verify_bundle_offline(
     // Optional semantic check on the event contents
     check_event: Option<&dyn Fn(&ActorEvent) -> bool>,
 ) -> Result<Vec<bool>> {
-    println!("Verifying bundle offline");
     // Load bundle blocks into an isolated store
     let bs = MemoryBlockstore::new();
     for wb in &bundle.blocks {
@@ -425,19 +423,13 @@ pub fn verify_bundle_offline(
             let hdr: HeaderLite = serde_ipld_dagcbor::from_slice(&raw)?;
 
             let tx_cid = hdr.messages;
-            println!("tx_cid: {:?}", tx_cid);
             let tx_raw = bs
                 .get(&tx_cid)?
                 .ok_or_else(|| anyhow!("missing TxMeta {}", tx_cid))?;
-            println!("tx_raw: {:?}", tx_raw);
 
             let (bls_root, secp_root): (Cid, Cid) = serde_ipld_dagcbor::from_slice(&tx_raw)?;
 
-            println!("bls_root: {:?}", bls_root);
-            println!("secp_root: {:?}", secp_root);
-
             let bls_amt = Amtv0::<Cid, _>::load(&bls_root, bs)?;
-            println!("bls_amt: {:?}", bls_amt);
             bls_amt.for_each(|_, c| {
                 if seen.insert(*c) {
                     out.push(*c);
@@ -445,7 +437,6 @@ pub fn verify_bundle_offline(
                 Ok(())
             })?;
             let secp_amt = Amtv0::<Cid, _>::load(&secp_root, bs)?;
-            println!("secp_amt: {:?}", secp_amt);
             secp_amt.for_each(|_, c| {
                 if seen.insert(*c) {
                     out.push(*c);
@@ -458,8 +449,7 @@ pub fn verify_bundle_offline(
 
     let mut results = Vec::with_capacity(bundle.claims.len());
 
-    'each: for cl in &bundle.claims {
-        println!("trusting parent ts");
+    for cl in &bundle.claims {
         // 1) trust anchors
         let p_cids: Vec<Cid> = cl
             .parent_tipset_cids
@@ -476,11 +466,8 @@ pub fn verify_bundle_offline(
             continue;
         }
 
-        println!("trusting child header");
-
         // 2) compute VM exec order from committed data
         let exec = exec_from_headers(&bs, &p_cids)?;
-        println!("exec: {:?}", exec);
         let msg_cid = Cid::try_from(cl.message_cid.as_str())?;
         let Some(i) = exec.iter().position(|c| c == &msg_cid) else {
             results.push(false);
