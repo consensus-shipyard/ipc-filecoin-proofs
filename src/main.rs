@@ -13,7 +13,8 @@ use serde_json::json;
 use types::ApiTipset;
 use url::Url;
 
-use proofs::{generate_bundle_for_subnet, make_check_event_evm, verify_bundle_offline};
+use crate::proofs::generator::generate_bundle;
+use crate::proofs::verifier::{make_check_event_evm, verify_bundle};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -22,16 +23,17 @@ async fn main() -> anyhow::Result<()> {
         None,
     );
 
-    let H = 2980106;
+    let height = 2982844;
+    let _last_top_down_nonce = 6;
 
     let parent: ApiTipset = client
-        .request("Filecoin.ChainGetTipSetByHeight", json!([H, null]))
+        .request("Filecoin.ChainGetTipSetByHeight", json!([height, null]))
         .await?;
     let child: ApiTipset = client
-        .request("Filecoin.ChainGetTipSetByHeight", json!([H + 1, null]))
+        .request("Filecoin.ChainGetTipSetByHeight", json!([height + 1, null]))
         .await?;
 
-    let proof_bundle = generate_bundle_for_subnet(
+    let proof_bundle = generate_bundle(
         &client,
         &parent,
         &child,
@@ -46,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
 
     let check_event = make_check_event_evm("NewTopDownMessage(bytes32,uint256)", "calib-subnet-1");
 
-    let res = verify_bundle_offline(
+    let res = verify_bundle(
         &proof_bundle,
         &is_trusted_parent_ts,
         &is_trusted_child_header,
