@@ -1,4 +1,4 @@
-use crate::types::CIDMap;
+use crate::client::types::CIDMap;
 use serde::{Deserialize, Serialize};
 
 // F3 Finality Certificate types (aligned with Forest implementation)

@@ -8,9 +8,9 @@ use serde_ipld_dagcbor;
 
 use std::collections::HashSet;
 
+use crate::client::types::ApiTipset;
 use crate::client::{LotusClient, RpcBlockstore};
 use crate::proofs::common::decode::HeaderLite;
-use crate::types::ApiTipset;
 
 /// Reconstruct the execution order from blockstore headers (for offline verification)
 pub fn reconstruct_execution_order<S>(bs: &S, parent_hdr_cids: &[Cid]) -> Result<Vec<Cid>>

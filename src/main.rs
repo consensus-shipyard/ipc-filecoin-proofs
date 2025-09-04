@@ -3,12 +3,11 @@
 mod cert;
 mod client;
 mod proofs;
-mod types;
 
 use crate::client::LotusClient;
 
+use client::types::ApiTipset;
 use serde_json::json;
-use types::ApiTipset;
 use url::Url;
 
 use crate::proofs::{

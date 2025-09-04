@@ -10,6 +10,7 @@ use fvm_shared::event::StampedEvent;
 use fvm_shared::receipt::Receipt as MessageReceipt;
 use serde_ipld_dagcbor;
 
+use crate::client::types::{ApiReceipt, ApiTipset, CIDMap};
 use crate::client::{LotusClient, RpcBlockstore};
 use crate::proofs::common::{
     blockstore::RecordingBlockStore,
@@ -20,7 +21,6 @@ use crate::proofs::events::{
     bundle::{EventProof, EventProofBundle},
     utils::build_execution_order,
 };
-use crate::types::{ApiReceipt, ApiTipset, CIDMap};
 
 // Note: Contract filtering removed - fetching all messages is already inefficient,
 // so filtering by address doesn't improve performance. If filtering is needed,

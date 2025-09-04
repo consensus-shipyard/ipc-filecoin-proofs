@@ -4,6 +4,7 @@ use ethereum_types::H256;
 use fvm_ipld_blockstore::Blockstore;
 use hex;
 
+use crate::client::types::ApiTipset;
 use crate::client::{LotusClient, RpcBlockstore};
 use crate::proofs::common::{
     blockstore::RecordingBlockStore,
@@ -12,7 +13,6 @@ use crate::proofs::common::{
     evm::left_pad_32,
 };
 use crate::proofs::storage::{bundle::StorageProof, decode::read_storage_slot};
-use crate::types::ApiTipset;
 use fvm_shared::address::Address;
 
 /// Generate a storage proof for a specific actor's storage slot

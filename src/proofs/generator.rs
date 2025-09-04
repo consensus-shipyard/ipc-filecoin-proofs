@@ -2,11 +2,11 @@ use anyhow::Result;
 use ethereum_types::H256;
 use std::collections::BTreeSet;
 
+use crate::client::types::ApiTipset;
 use crate::client::LotusClient;
 use crate::proofs::common::bundle::{ProofBlock, UnifiedProofBundle};
 use crate::proofs::events::generator::generate_event_proof;
 use crate::proofs::storage::generator::generate_storage_proof;
-use crate::types::ApiTipset;
 
 /// Configuration for generating storage proofs
 pub struct StorageProofSpec {
