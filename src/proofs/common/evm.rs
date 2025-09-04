@@ -1,14 +1,16 @@
 use fvm_shared::event::ActorEvent;
+use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
-use tiny_keccak::{Hasher, Keccak};
 
+/// Represents an EVM log event with topics and data
 #[derive(Debug, Clone)]
 pub struct EvmLog {
     pub topics: Vec<[u8; 32]>,
     pub data: Vec<u8>,
 }
 
-pub fn evm_log_from_actor_event(ev: &ActorEvent) -> Option<EvmLog> {
+/// Extract an EVM log from a Filecoin actor event
+pub fn extract_evm_log(ev: &ActorEvent) -> Option<EvmLog> {
     let mut m = HashMap::<&str, &[u8]>::new();
     for e in &ev.entries {
         m.insert(e.key.as_str(), e.value.as_slice());
@@ -56,18 +58,43 @@ pub fn evm_log_from_actor_event(ev: &ActorEvent) -> Option<EvmLog> {
     Some(EvmLog { topics, data })
 }
 
-pub fn keccak_event_sig(s: &str) -> [u8; 32] {
-    let mut h = Keccak::v256();
-    let mut out = [0u8; 32];
+/// Hash an event signature string using Keccak256 (Solidity standard)
+pub fn hash_event_signature(s: &str) -> [u8; 32] {
+    let mut h = Keccak256::new();
     h.update(s.as_bytes());
-    h.finalize(&mut out);
-    out
+    let out = h.finalize();
+    let mut r = [0u8; 32];
+    r.copy_from_slice(&out);
+    r
 }
 
-pub fn bytes32_from_ascii(s: &str) -> [u8; 32] {
+/// Convert ASCII string to bytes32 (right-padded with zeros)
+pub fn ascii_to_bytes32(s: &str) -> [u8; 32] {
     let mut out = [0u8; 32];
     let b = s.as_bytes();
     let n = b.len().min(32);
     out[..n].copy_from_slice(&b[..n]);
+    out
+}
+
+/// General Keccak256 hash function
+pub fn keccak256(bytes: impl AsRef<[u8]>) -> [u8; 32] {
+    let mut h = Keccak256::new();
+    h.update(bytes.as_ref());
+    let out = h.finalize();
+    let mut r = [0u8; 32];
+    r.copy_from_slice(&out);
+    r
+}
+
+/// Left-pad bytes to 32 bytes (for EVM storage values)
+pub fn left_pad_32(v: &[u8]) -> [u8; 32] {
+    if v.len() >= 32 {
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&v[v.len() - 32..]);
+        return out;
+    }
+    let mut out = [0u8; 32];
+    out[32 - v.len()..].copy_from_slice(v);
     out
 }
