@@ -36,6 +36,7 @@ futures = "0.3"
 parking_lot = "0.12"
 ethereum-types = "0.14"
 sha3 = "0.10"
+thiserror = "1.0"
 
 [[bin]]
 name = "proofs"

@@ -9,12 +9,9 @@ use fvm_shared::event::{ActorEvent, StampedEvent};
 use fvm_shared::receipt::Receipt as MessageReceipt;
 use serde_ipld_dagcbor;
 
-use crate::proofs::common::evm::{ascii_to_bytes32, extract_evm_log, hash_event_signature};
 use crate::proofs::common::decode::HeaderLite;
-use crate::proofs::events::{
-    bundle::EventProofBundle,
-    utils::reconstruct_execution_order,
-};
+use crate::proofs::common::evm::{ascii_to_bytes32, extract_evm_log, hash_event_signature};
+use crate::proofs::events::{bundle::EventProofBundle, utils::reconstruct_execution_order};
 
 /// Create an event filter function for matching EVM events
 pub fn create_event_filter(

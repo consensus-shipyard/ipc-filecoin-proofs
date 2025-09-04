@@ -1,17 +1,16 @@
 use anyhow::Result;
-use cid::Cid;
 use ethereum_types::H256;
 use std::collections::BTreeSet;
 
 use crate::client::LotusClient;
 use crate::proofs::common::bundle::{ProofBlock, UnifiedProofBundle};
-use crate::proofs::events::{bundle::EventProof, generator::generate_event_proof};
-use crate::proofs::storage::{bundle::StorageProof, generator::generate_storage_proof};
+use crate::proofs::events::generator::generate_event_proof;
+use crate::proofs::storage::generator::generate_storage_proof;
 use crate::types::ApiTipset;
 
 /// Configuration for generating storage proofs
 pub struct StorageProofSpec {
-    pub actor_id: u64,
+    pub actor_id: u64, // Filecoin Actor ID (resolved from Ethereum address if needed)
     pub slot: H256,
 }
 

@@ -7,7 +7,6 @@ use fvm_ipld_amt::{Amt, Amtv0};
 
 use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
 use fvm_shared::event::StampedEvent;
-
 use fvm_shared::receipt::Receipt as MessageReceipt;
 use serde_ipld_dagcbor;
 
@@ -22,6 +21,10 @@ use crate::proofs::events::{
     utils::build_execution_order,
 };
 use crate::types::{ApiReceipt, ApiTipset, CIDMap};
+
+// Note: Contract filtering removed - fetching all messages is already inefficient,
+// so filtering by address doesn't improve performance. If filtering is needed,
+// it should be done at the RPC level.
 
 /// Generate an event proof bundle for events matching the specified signature and topic
 pub async fn generate_event_proof(

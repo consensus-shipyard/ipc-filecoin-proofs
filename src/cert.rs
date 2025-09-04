@@ -45,6 +45,11 @@ impl TipsetKey {
     pub fn as_slice(&self) -> &[CIDMap] {
         &self.0
     }
+
+    /// Returns all CIDs as a reference to the vector
+    pub fn cids(&self) -> &Vec<CIDMap> {
+        &self.0
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -100,5 +105,33 @@ fn create_mock_finality_certificate() -> FinalityCertificate {
             power_delta: "1000000000000000000".to_string(),
             signing_key: "c2lnbmluZyBrZXk=".to_string(), // "signing key" in base64
         }],
+    }
+}
+
+impl FinalityCertificate {
+    /// Check if certificate is valid for an epoch (placeholder implementation)
+    pub fn is_valid_for_epoch(&self, epoch: i64) -> bool {
+        // TODO: Implement proper validation against the EC chain
+        // For now, check if epoch is within the EC chain range
+        if self.ec_chain.is_empty() {
+            return false;
+        }
+
+        // Check if epoch is within the range of the EC chain
+        let min_epoch = self.ec_chain.first().map(|t| t.epoch).unwrap_or(0);
+        let max_epoch = self.ec_chain.last().map(|t| t.epoch).unwrap_or(0);
+
+        epoch >= min_epoch && epoch <= max_epoch
+    }
+
+    /// Verify certificate is valid for a tipset and instance
+    pub fn is_valid_for_tipset(&self, tipset: &TipsetKey, instance: u64) -> bool {
+        // This would check:
+        // 1. The certificate instance matches the expected instance
+        // 2. The tipset is within the EC chain range
+        // 3. The signature is valid for the signers
+        // 4. The power table delta is correctly applied
+        // For now this is a simplified check
+        self.instance == instance && tipset.cids().len() > 0
     }
 }

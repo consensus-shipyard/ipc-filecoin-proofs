@@ -42,8 +42,7 @@ pub fn verify_storage_proof(
 
     // 3) Load actor object from the state-tree at ParentStateRoot (same helper)
     let id_addr = Address::new_id(proof.actor_id);
-    let actor_obj = get_actor_state(&bs, &psr_from_header, id_addr)
-        .context("get_actor_state")?;
+    let actor_obj = get_actor_state(&bs, &psr_from_header, id_addr).context("get_actor_state")?;
     if actor_obj.state.to_string() != proof.actor_state_cid {
         return Ok(false);
     }
