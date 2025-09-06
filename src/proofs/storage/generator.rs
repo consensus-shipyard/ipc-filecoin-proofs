@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use cid::Cid;
 use ethereum_types::H256;
 use fvm_ipld_blockstore::Blockstore;
+use fvm_shared::address::Address;
 use hex;
 
 use crate::client::types::ApiTipset;
@@ -10,103 +11,168 @@ use crate::proofs::common::{
     bundle::ProofBlock,
     decode::{extract_parent_state_root, get_actor_state, parse_evm_state},
     evm::left_pad_32,
+    witness::{parse_cid, WitnessCollector},
 };
 use crate::proofs::storage::{bundle::StorageProof, decode::read_storage_slot};
-use fvm_shared::address::Address;
 
 /// Generate a storage proof for a specific actor's storage slot
+///
+/// # Arguments
+/// * `net` - Network blockstore containing state data
+/// * `parent` - Parent tipset (H, finalized)
+/// * `child` - Child tipset (H+1, finalized)
+/// * `actor_id` - Actor ID to read storage from
+/// * `slot_h256` - Storage slot to read
+///
+/// # Returns
+/// Tuple of storage proof and witness blocks for offline verification
 pub async fn generate_storage_proof<BS: Blockstore>(
     net: &BS,
-    _parent: &ApiTipset, // H (finalized) - not used directly
-    child: &ApiTipset,   // H+1 (finalized)
+    _parent: &ApiTipset,
+    child: &ApiTipset,
     actor_id: u64,
     slot_h256: H256,
 ) -> Result<(StorageProof, Vec<ProofBlock>)> {
-    // Choose first block in the tipset (assume agreement)
-    let child_cid = Cid::try_from(child.cids[0].cid.as_str())?;
+    // Step 1: Extract and verify parent state root from child header
+    let (child_cid, parent_state_root) = extract_and_verify_parent_state(net, child)?;
 
-    // Verify ParentStateRoot from header CBOR, cross-check JSON
-    let rec_header = RecordingBlockStore::new(net);
+    // Step 2: Setup witness collection
+    let mut collector = WitnessCollector::new(net);
+    collector.add_cid(child_cid);
+    collector.add_cid(parent_state_root);
 
-    let child_header_raw = rec_header
+    // Step 3: Load actor state and record path
+    let (actor_state_cid, storage_root) =
+        load_actor_and_storage_root(net, &mut collector, parent_state_root, actor_id)?;
+
+    // Step 4: Read storage value and record path
+    let value = read_storage_value(net, &mut collector, storage_root, slot_h256)?;
+
+    // Step 5: Materialize witness blocks
+    let blocks = collector.materialize()?;
+
+    // Step 6: Create proof claim
+    let proof = create_proof_claim(
+        child,
+        child_cid,
+        parent_state_root,
+        actor_id,
+        actor_state_cid,
+        storage_root,
+        slot_h256,
+        value,
+    );
+
+    Ok((proof, blocks))
+}
+
+// --- Helper Functions ---
+
+/// Extract parent state root from child header and verify consistency
+fn extract_and_verify_parent_state<BS: Blockstore>(
+    net: &BS,
+    child: &ApiTipset,
+) -> Result<(Cid, Cid)> {
+    // Choose first block in tipset (assume agreement)
+    let child_cid = parse_cid(&child.cids[0].cid, "child block")?;
+
+    // Load child header with recording
+    let header_recorder = RecordingBlockStore::new(net);
+    let child_header_raw = header_recorder
         .get(&child_cid)?
         .ok_or_else(|| anyhow!("missing child header {}", child_cid))?;
 
-    let psr_from_header = extract_parent_state_root(&child_header_raw)?;
-    let psr_from_json = Cid::try_from(child.blocks[0].parent_state_root.cid.as_str())?;
-    if psr_from_header != psr_from_json {
+    // Extract parent state root from CBOR header
+    let parent_state_from_header = extract_parent_state_root(&child_header_raw)?;
+
+    // Cross-check with JSON representation
+    let parent_state_from_json = parse_cid(
+        &child.blocks[0].parent_state_root.cid,
+        "parent state root from JSON",
+    )?;
+
+    if parent_state_from_header != parent_state_from_json {
         return Err(anyhow!(
             "ParentStateRoot mismatch: header {} vs JSON {}",
-            psr_from_header,
-            psr_from_json
+            parent_state_from_header,
+            parent_state_from_json
         ));
     }
-    let parent_state_root = psr_from_header;
 
-    // 1) Load actor object from the state-tree at ParentStateRoot
-    let rec_state = RecordingBlockStore::new(&net);
+    Ok((child_cid, parent_state_from_header))
+}
 
-    let id_addr = Address::new_id(actor_id);
-    let actor_obj = get_actor_state(&rec_state, &parent_state_root, id_addr)?;
+/// Load actor state and extract storage root
+fn load_actor_and_storage_root<BS: Blockstore>(
+    net: &BS,
+    collector: &mut WitnessCollector<'_, BS>,
+    parent_state_root: Cid,
+    actor_id: u64,
+) -> Result<(Cid, Cid)> {
+    // Record state tree traversal
+    let state_recorder = RecordingBlockStore::new(net);
 
-    // 2) Load EVM state to get storage_root
-    let head_cid = actor_obj.state;
+    // Load actor object from state tree
+    let actor_address = Address::new_id(actor_id);
+    let actor_object = get_actor_state(&state_recorder, &parent_state_root, actor_address)?;
+    let actor_state_cid = actor_object.state;
 
-    let evm_state_raw = rec_state
-        .get(&head_cid)?
-        .ok_or_else(|| anyhow::anyhow!("missing EVM state {}", head_cid))?;
+    // Load EVM state to extract storage root
+    let evm_state_raw = state_recorder
+        .get(&actor_state_cid)?
+        .ok_or_else(|| anyhow!("missing EVM state {}", actor_state_cid))?;
 
     let evm_state = parse_evm_state(&evm_state_raw)?;
+    let storage_root = evm_state.contract_state;
 
-    // This is the storage_root
-    let storage_root: Cid = evm_state.contract_state;
+    // Add to witness collection
+    collector.add_cid(actor_state_cid);
+    collector.add_cid(storage_root);
+    collector.collect_from_recording(&state_recorder);
 
-    // 3) Load the storage HAMT and read the slot
-    let rec_storage = RecordingBlockStore::new(&net);
+    Ok((actor_state_cid, storage_root))
+}
 
-    let value_raw =
-        read_storage_slot(&rec_state, &storage_root, &slot_h256.into())?.unwrap_or_default(); // Missing key means zero
+/// Read storage value at specified slot
+fn read_storage_value<BS: Blockstore>(
+    net: &BS,
+    collector: &mut WitnessCollector<'_, BS>,
+    storage_root: Cid,
+    slot_h256: H256,
+) -> Result<[u8; 32]> {
+    // Record storage HAMT traversal
+    let storage_recorder = RecordingBlockStore::new(net);
 
-    // 4) Collect all blocks needed for offline verification
-    let mut needed = std::collections::BTreeSet::<Cid>::new();
-    // trust anchors
-    needed.insert(child_cid);
-    needed.insert(parent_state_root);
-    // actor head and storage root
-    needed.insert(head_cid);
-    needed.insert(storage_root);
+    // Read slot value (missing key means zero)
+    let raw_value =
+        read_storage_slot(&storage_recorder, &storage_root, &slot_h256.into())?.unwrap_or_default();
 
-    // include traversals
-    for c in rec_header.take_seen() {
-        needed.insert(c);
-    }
-    for c in rec_state.take_seen() {
-        needed.insert(c);
-    }
-    for c in rec_storage.take_seen() {
-        needed.insert(c);
-    }
+    // Add storage traversal to witness
+    collector.collect_from_recording(&storage_recorder);
 
-    // Materialize witness blocks
-    let mut blocks = Vec::<ProofBlock>::new();
-    for c in needed {
-        let raw = net.get(&c)?.ok_or_else(|| anyhow!("missing {}", c))?;
-        blocks.push(ProofBlock { cid: c, data: raw });
-    }
+    // Left-pad to 32 bytes
+    Ok(left_pad_32(&raw_value))
+}
 
-    let value32 = left_pad_32(&value_raw);
-
-    // Create proof claim
-    let proof = StorageProof {
+/// Create the storage proof claim
+fn create_proof_claim(
+    child: &ApiTipset,
+    child_cid: Cid,
+    parent_state_root: Cid,
+    actor_id: u64,
+    actor_state_cid: Cid,
+    storage_root: Cid,
+    slot_h256: H256,
+    value: [u8; 32],
+) -> StorageProof {
+    StorageProof {
         child_epoch: child.height,
         child_block_cid: child_cid.to_string(),
         parent_state_root: parent_state_root.to_string(),
         actor_id,
-        actor_state_cid: head_cid.to_string(),
+        actor_state_cid: actor_state_cid.to_string(),
         storage_root: storage_root.to_string(),
         slot: format!("0x{}", hex::encode(slot_h256.0)),
-        value: format!("0x{}", hex::encode(value32)),
-    };
-
-    Ok((proof, blocks))
+        value: format!("0x{}", hex::encode(value)),
+    }
 }

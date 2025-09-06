@@ -4,6 +4,7 @@ use fvm_ipld_amt::{Amt, Amtv0};
 use fvm_ipld_blockstore::Blockstore;
 use fvm_shared::event::StampedEvent;
 use fvm_shared::receipt::Receipt as MessageReceipt;
+use hex;
 use serde_ipld_dagcbor;
 
 use crate::client::types::{ApiReceipt, ApiTipset, CIDMap};
@@ -14,7 +15,7 @@ use crate::proofs::common::{
     witness::{parse_cid, WitnessCollector},
 };
 use crate::proofs::events::{
-    bundle::{EventProof, EventProofBundle},
+    bundle::{EventData, EventProof, EventProofBundle},
     utils::build_execution_order,
 };
 
@@ -269,6 +270,17 @@ async fn find_matching_events<'a, BS: Blockstore>(
                 // Check event signature and topic
                 if let Some(log) = extract_evm_log(&se.event) {
                     if matcher.matches_log(&log) {
+                        // Capture event data for on-chain execution
+                        let event_data = EventData {
+                            emitter: se.emitter,
+                            topics: log
+                                .topics
+                                .iter()
+                                .map(|t| format!("0x{}", hex::encode(t)))
+                                .collect(),
+                            data: format!("0x{}", hex::encode(&log.data)),
+                        };
+
                         proofs.push(EventProof {
                             parent_epoch: parent.height,
                             child_epoch: child.height,
@@ -277,6 +289,7 @@ async fn find_matching_events<'a, BS: Blockstore>(
                             message_cid: msg_cid.to_string(),
                             exec_index: i as u64,
                             event_index: j,
+                            event_data,
                         });
                     }
                 }
