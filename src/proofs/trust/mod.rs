@@ -2,7 +2,6 @@ use anyhow::Result;
 use cid::Cid;
 
 use crate::cert::FinalityCertificate;
-use crate::proofs::common::error::{ProofError, ProofResult};
 
 /// Trust verification policy for validating finality of blocks
 #[derive(Debug, Clone)]
@@ -31,10 +30,10 @@ impl std::fmt::Debug for CustomVerifier {
 /// Trait for custom trust verification logic
 pub trait TrustVerifier: Send + Sync {
     /// Verify if a parent tipset is trusted/finalized
-    fn verify_parent_tipset(&self, epoch: i64, cids: &[Cid]) -> ProofResult<bool>;
+    fn verify_parent_tipset(&self, epoch: i64, cids: &[Cid]) -> Result<bool>;
 
     /// Verify if a child header is trusted/finalized
-    fn verify_child_header(&self, epoch: i64, cid: &Cid) -> ProofResult<bool>;
+    fn verify_child_header(&self, epoch: i64, cid: &Cid) -> Result<bool>;
 }
 
 impl TrustPolicy {
@@ -51,7 +50,7 @@ impl TrustPolicy {
     }
 
     /// Verify if a parent tipset is trusted according to this policy
-    pub fn verify_parent_tipset(&self, epoch: i64, cids: &[Cid]) -> ProofResult<bool> {
+    pub fn verify_parent_tipset(&self, epoch: i64, cids: &[Cid]) -> Result<bool> {
         match self {
             Self::AcceptAll => Ok(true),
 
@@ -65,7 +64,7 @@ impl TrustPolicy {
     }
 
     /// Verify if a child header is trusted according to this policy
-    pub fn verify_child_header(&self, epoch: i64, cid: &Cid) -> ProofResult<bool> {
+    pub fn verify_child_header(&self, epoch: i64, cid: &Cid) -> Result<bool> {
         match self {
             Self::AcceptAll => Ok(true),
 
@@ -86,11 +85,11 @@ pub struct MockTrustVerifier {
 }
 
 impl TrustVerifier for MockTrustVerifier {
-    fn verify_parent_tipset(&self, _epoch: i64, _cids: &[Cid]) -> ProofResult<bool> {
+    fn verify_parent_tipset(&self, _epoch: i64, _cids: &[Cid]) -> Result<bool> {
         Ok(self.parent_result)
     }
 
-    fn verify_child_header(&self, _epoch: i64, _cid: &Cid) -> ProofResult<bool> {
+    fn verify_child_header(&self, _epoch: i64, _cid: &Cid) -> Result<bool> {
         Ok(self.child_result)
     }
 }

@@ -5,7 +5,6 @@ use fvm_ipld_blockstore::Blockstore;
 use hex;
 
 use crate::client::types::ApiTipset;
-use crate::client::{LotusClient, RpcBlockstore};
 use crate::proofs::common::{
     blockstore::RecordingBlockStore,
     bundle::ProofBlock,
@@ -16,8 +15,8 @@ use crate::proofs::storage::{bundle::StorageProof, decode::read_storage_slot};
 use fvm_shared::address::Address;
 
 /// Generate a storage proof for a specific actor's storage slot
-pub async fn generate_storage_proof(
-    client: &LotusClient,
+pub async fn generate_storage_proof<BS: Blockstore>(
+    net: &BS,
     _parent: &ApiTipset, // H (finalized) - not used directly
     child: &ApiTipset,   // H+1 (finalized)
     actor_id: u64,
@@ -27,8 +26,7 @@ pub async fn generate_storage_proof(
     let child_cid = Cid::try_from(child.cids[0].cid.as_str())?;
 
     // Verify ParentStateRoot from header CBOR, cross-check JSON
-    let net = RpcBlockstore::new(client);
-    let rec_header = RecordingBlockStore::new(&net);
+    let rec_header = RecordingBlockStore::new(net);
 
     let child_header_raw = rec_header
         .get(&child_cid)?

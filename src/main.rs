@@ -23,7 +23,8 @@ async fn main() -> anyhow::Result<()> {
         None,
     );
 
-    let height = 2988247;
+    // Use a recent block height (current - 100 for safety)
+    let height = 2992953;
     let _last_top_down_nonce = 15;
 
     let parent: ApiTipset = client
@@ -48,16 +49,18 @@ async fn main() -> anyhow::Result<()> {
 
     // Resolve Ethereum address to Actor ID
     let actor_id = resolve_eth_address_to_actor_id(&client, contract_address).await?;
+    println!("  Resolved to Actor ID: {}", actor_id);
 
     // Define what proofs we want to generate
     let storage_spec = StorageProofSpec { actor_id, slot };
 
     let storage_specs = vec![storage_spec];
 
-    // Event specs
+    // Event specs - filter by both event type AND actor ID
     let event_specs = vec![EventProofSpec {
         event_signature: "NewTopDownMessage(bytes32,uint256)".to_string(),
         topic_1: "calib-subnet-1".to_string(),
+        actor_id_filter: Some(actor_id), // Filter by actor that emitted the events
     }];
 
     // Generate unified bundle with both storage and event proofs
@@ -77,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
     // let f3_cert = get_f3_certificate_for_epoch(height)?;
     // let trust_policy = TrustPolicy::with_f3_certificate(f3_cert);
 
+    // For verification, we can still create a filter for specific event types if needed
     let event_filter = create_event_filter("NewTopDownMessage(bytes32,uint256)", "calib-subnet-1");
 
     let verification_results =

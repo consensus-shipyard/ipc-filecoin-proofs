@@ -3,7 +3,6 @@ use cid::Cid;
 use fvm_shared::event::ActorEvent;
 
 use crate::proofs::common::bundle::{UnifiedProofBundle, UnifiedVerificationResult};
-use crate::proofs::common::error::ProofResult;
 use crate::proofs::events::bundle::EventProofBundle;
 use crate::proofs::events::verifier::verify_event_proof;
 use crate::proofs::storage::verifier::verify_storage_proof;
@@ -14,7 +13,7 @@ pub fn verify_proof_bundle(
     bundle: &UnifiedProofBundle,
     trust_policy: &TrustPolicy,
     event_filter: Option<&dyn Fn(&ActorEvent) -> bool>,
-) -> ProofResult<UnifiedVerificationResult> {
+) -> Result<UnifiedVerificationResult> {
     // Verify storage proofs
     let mut storage_results = Vec::new();
     for proof in &bundle.storage_proofs {

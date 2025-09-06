@@ -1,32 +1,36 @@
 use anyhow::{anyhow, Result};
 use cid::Cid;
-// Amt for events Amtv0 for receipts/txmeta
 use fvm_ipld_amt::{Amt, Amtv0};
-
 use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
 use fvm_shared::event::{ActorEvent, StampedEvent};
-
 use fvm_shared::receipt::Receipt as MessageReceipt;
 use serde_ipld_dagcbor;
 
-use crate::proofs::common::decode::HeaderLite;
-use crate::proofs::common::evm::{ascii_to_bytes32, extract_evm_log, hash_event_signature};
+use crate::proofs::common::{
+    decode::HeaderLite,
+    evm::{ascii_to_bytes32, extract_evm_log, hash_event_signature},
+    witness::parse_cids,
+};
 use crate::proofs::events::{bundle::EventProofBundle, utils::reconstruct_execution_order};
 
 /// Create an event filter function for matching EVM events
+/// 
+/// # Arguments
+/// * `event_sig` - Event signature (e.g., "NewTopDownMessage(bytes32,uint256)")
+/// * `subnet_id` - Subnet identifier to match in topic1
+/// 
+/// # Returns
+/// A closure that checks if an event matches the criteria
 pub fn create_event_filter(
     event_sig: &str,
     subnet_id: &str,
-) -> impl Fn(&fvm_shared::event::ActorEvent) -> bool {
+) -> impl Fn(&ActorEvent) -> bool {
     let t0: [u8; 32] = hash_event_signature(event_sig);
     let t1: [u8; 32] = ascii_to_bytes32(subnet_id);
+    
     move |ev| {
         if let Some(log) = extract_evm_log(ev) {
-            if log.topics.len() < 2 {
-                return false;
-            }
-            // topics[0] == hash(sig), topics[1] == bytes32(subnetId)
-            log.topics[0] == t0 && log.topics[1] == t1
+            log.topics.len() >= 2 && log.topics[0] == t0 && log.topics[1] == t1
         } else {
             false
         }
@@ -34,106 +38,208 @@ pub fn create_event_filter(
 }
 
 /// Verify an event proof bundle offline
+/// 
+/// # Arguments
+/// * `bundle` - The event proof bundle to verify
+/// * `is_trusted_parent_ts` - Function to verify parent tipset is trusted
+/// * `is_trusted_child_header` - Function to verify child header is trusted
+/// * `check_event` - Optional semantic check on event contents
+/// 
+/// # Returns
+/// Vector of boolean results for each proof in the bundle
 pub fn verify_event_proof(
     bundle: &EventProofBundle,
-    // Trust anchors: the caller must assert these headers are finalized.
     is_trusted_parent_ts: &dyn Fn(i64, &[Cid]) -> bool,
     is_trusted_child_header: &dyn Fn(i64, &Cid) -> bool,
-    // Optional semantic check on the event contents
     check_event: Option<&dyn Fn(&ActorEvent) -> bool>,
 ) -> Result<Vec<bool>> {
-    // Load bundle blocks into an isolated store
+    // Load witness blocks
+    let bs = load_witness_store(&bundle.blocks)?;
+    
+    // Verify each proof
+    let mut results = Vec::with_capacity(bundle.proofs.len());
+    for proof in &bundle.proofs {
+        let is_valid = verify_single_proof(
+            &bs,
+            proof,
+            is_trusted_parent_ts,
+            is_trusted_child_header,
+            check_event,
+        )?;
+        results.push(is_valid);
+    }
+    
+    Ok(results)
+}
+
+// --- Helper Functions ---
+
+/// Load witness blocks into memory store
+fn load_witness_store(blocks: &[crate::proofs::common::bundle::ProofBlock]) -> Result<MemoryBlockstore> {
     let bs = MemoryBlockstore::new();
-    for wb in &bundle.blocks {
+    for wb in blocks {
         bs.put_keyed(&wb.cid, &wb.data)?;
     }
+    Ok(bs)
+}
 
-    let mut results = Vec::with_capacity(bundle.proofs.len());
-
-    for proof in &bundle.proofs {
-        // trust anchors
-        let p_cids: Vec<Cid> = proof
-            .parent_tipset_cids
-            .iter()
-            .map(|s| Cid::try_from(s.as_str()).unwrap())
-            .collect();
-        if !is_trusted_parent_ts(proof.parent_epoch, &p_cids) {
-            results.push(false);
-            continue;
-        }
-        let child_cid = Cid::try_from(proof.child_block_cid.as_str())?;
-        if !is_trusted_child_header(proof.child_epoch, &child_cid) {
-            results.push(false);
-            continue;
-        }
-
-        // decode child header (DAG-CBOR)
-        let child_raw = bs
-            .get(&child_cid)?
-            .ok_or_else(|| anyhow!("missing child header"))?;
-        let child_hdr: HeaderLite = serde_ipld_dagcbor::from_slice(&child_raw)?;
-
-        // explicit anchor checks:
-        if child_hdr.parents != p_cids {
-            results.push(false);
-            continue;
-        }
-        if child_hdr.height != proof.child_epoch {
-            results.push(false);
-            continue;
-        }
-
-        // check one parent header height
-        let p0_raw = bs
-            .get(&p_cids[0])?
-            .ok_or_else(|| anyhow!("missing parent header"))?;
-        let p0_hdr: HeaderLite = serde_ipld_dagcbor::from_slice(&p0_raw)?;
-        if p0_hdr.height != proof.parent_epoch {
-            results.push(false);
-            continue;
-        }
-
-        // compute canonical exec order (with TxMeta recompute assert)
-        let exec = reconstruct_execution_order(&bs, &p_cids)?;
-        let msg_cid = Cid::try_from(proof.message_cid.as_str())?;
-        let Some(i) = exec.iter().position(|c| c == &msg_cid) else {
-            results.push(false);
-            continue;
-        };
-        if i as u64 != proof.exec_index {
-            results.push(false);
-            continue;
-        }
-
-        // (prove receipt[i] under child's receipts root
-        let r_root = child_hdr.parent_message_receipts;
-        let r_amt = Amtv0::<MessageReceipt, _>::load(&r_root, &bs)?;
-        let Some(rcpt) = r_amt.get(i as u64)? else {
-            results.push(false);
-            continue;
-        };
-
-        // prove event[j] under rcpt.events_root
-        let Some(ev_root) = rcpt.events_root else {
-            results.push(false);
-            continue;
-        };
-        let e_amt = Amt::<StampedEvent, _>::load(&ev_root, &bs)?;
-        let Some(se) = e_amt.get(proof.event_index)? else {
-            results.push(false);
-            continue;
-        };
-
-        // semantic predicate (topics/ABI) if provided
-        if let Some(pred) = check_event {
-            if !pred(&se.event) {
-                results.push(false);
-                continue;
-            }
-        }
-
-        results.push(true);
+/// Verify a single event proof
+fn verify_single_proof(
+    bs: &MemoryBlockstore,
+    proof: &crate::proofs::events::bundle::EventProof,
+    is_trusted_parent_ts: &dyn Fn(i64, &[Cid]) -> bool,
+    is_trusted_child_header: &dyn Fn(i64, &Cid) -> bool,
+    check_event: Option<&dyn Fn(&ActorEvent) -> bool>,
+) -> Result<bool> {
+    // Step 1: Verify trust anchors
+    if !verify_trust_anchors(proof, is_trusted_parent_ts, is_trusted_child_header)? {
+        return Ok(false);
     }
+    
+    // Step 2: Verify header consistency
+    let (child_cid, parent_cids) = if !verify_header_consistency(bs, proof)? {
+        return Ok(false);
+    } else {
+        // Extract for use in later steps
+        let child_cid = Cid::try_from(proof.child_block_cid.as_str())?;
+        let parent_cids = parse_cids(&proof.parent_tipset_cids, "parent tipset")?;
+        (child_cid, parent_cids)
+    };
+    
+    // Step 3: Verify execution order
+    let msg_cid = if !verify_execution_order(bs, &parent_cids, proof)? {
+        return Ok(false);
+    } else {
+        Cid::try_from(proof.message_cid.as_str())?
+    };
+    
+    // Step 4: Verify receipt and event
+    verify_receipt_and_event(bs, child_cid, proof, check_event)
+}
 
-    Ok(results)
+/// Verify that the trust anchors are valid
+fn verify_trust_anchors(
+    proof: &crate::proofs::events::bundle::EventProof,
+    is_trusted_parent_ts: &dyn Fn(i64, &[Cid]) -> bool,
+    is_trusted_child_header: &dyn Fn(i64, &Cid) -> bool,
+) -> Result<bool> {
+    // Parse CIDs
+    let parent_cids = parse_cids(&proof.parent_tipset_cids, "parent tipset")?;
+    let child_cid = Cid::try_from(proof.child_block_cid.as_str())?;
+    
+    // Check parent tipset trust
+    if !is_trusted_parent_ts(proof.parent_epoch, &parent_cids) {
+        return Ok(false);
+    }
+    
+    // Check child header trust
+    if !is_trusted_child_header(proof.child_epoch, &child_cid) {
+        return Ok(false);
+    }
+    
+    Ok(true)
+}
+
+/// Verify header consistency (epochs and parent links)
+fn verify_header_consistency(
+    bs: &MemoryBlockstore,
+    proof: &crate::proofs::events::bundle::EventProof,
+) -> Result<bool> {
+    let child_cid = Cid::try_from(proof.child_block_cid.as_str())?;
+    let parent_cids = parse_cids(&proof.parent_tipset_cids, "parent tipset")?;
+    
+    // Decode child header
+    let child_raw = bs
+        .get(&child_cid)?
+        .ok_or_else(|| anyhow!("missing child header in witness"))?;
+    let child_hdr: HeaderLite = serde_ipld_dagcbor::from_slice(&child_raw)?;
+    
+    // Check parent links
+    if child_hdr.parents != parent_cids {
+        return Ok(false);
+    }
+    
+    // Check child epoch
+    if child_hdr.height != proof.child_epoch {
+        return Ok(false);
+    }
+    
+    // Check parent epoch (verify one parent header)
+    let p0_raw = bs
+        .get(&parent_cids[0])?
+        .ok_or_else(|| anyhow!("missing parent header in witness"))?;
+    let p0_hdr: HeaderLite = serde_ipld_dagcbor::from_slice(&p0_raw)?;
+    
+    if p0_hdr.height != proof.parent_epoch {
+        return Ok(false);
+    }
+    
+    Ok(true)
+}
+
+/// Verify that the message is in the expected execution position
+fn verify_execution_order(
+    bs: &MemoryBlockstore,
+    parent_cids: &[Cid],
+    proof: &crate::proofs::events::bundle::EventProof,
+) -> Result<bool> {
+    // Reconstruct execution order
+    let exec = reconstruct_execution_order(bs, parent_cids)?;
+    
+    // Find message in execution order
+    let msg_cid = Cid::try_from(proof.message_cid.as_str())?;
+    let Some(i) = exec.iter().position(|c| c == &msg_cid) else {
+        return Ok(false);
+    };
+    
+    // Verify execution index matches
+    if i as u64 != proof.exec_index {
+        return Ok(false);
+    }
+    
+    Ok(true)
+}
+
+/// Verify the receipt and event at the specified indices
+fn verify_receipt_and_event(
+    bs: &MemoryBlockstore,
+    child_cid: Cid,
+    proof: &crate::proofs::events::bundle::EventProof,
+    check_event: Option<&dyn Fn(&ActorEvent) -> bool>,
+) -> Result<bool> {
+    // Get child header to access receipts root
+    let child_raw = bs
+        .get(&child_cid)?
+        .ok_or_else(|| anyhow!("missing child header"))?;
+    let child_hdr: HeaderLite = serde_ipld_dagcbor::from_slice(&child_raw)?;
+    
+    // Load receipts AMT
+    let r_amt = Amtv0::<MessageReceipt, _>::load(&child_hdr.parent_message_receipts, bs)?;
+    
+    // Get receipt at execution index
+    let Some(rcpt) = r_amt.get(proof.exec_index)? else {
+        return Ok(false);
+    };
+    
+    // Check if receipt has events
+    let Some(ev_root) = rcpt.events_root else {
+        return Ok(false);
+    };
+    
+    // Load events AMT
+    let e_amt = Amt::<StampedEvent, _>::load(&ev_root, bs)?;
+    
+    // Get event at specified index
+    let Some(se) = e_amt.get(proof.event_index)? else {
+        return Ok(false);
+    };
+    
+    // Apply optional semantic check
+    if let Some(pred) = check_event {
+        if !pred(&se.event) {
+            return Ok(false);
+        }
+    }
+    
+    Ok(true)
 }
