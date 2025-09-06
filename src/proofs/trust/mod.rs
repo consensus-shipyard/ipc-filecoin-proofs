@@ -50,7 +50,7 @@ impl TrustPolicy {
     }
 
     /// Verify if a parent tipset is trusted according to this policy
-    pub fn verify_parent_tipset(&self, epoch: i64, cids: &[Cid]) -> Result<bool> {
+    pub fn verify_parent_tipset(&self, epoch: i64, _cids: &[Cid]) -> Result<bool> {
         match self {
             Self::AcceptAll => Ok(true),
 
@@ -64,7 +64,7 @@ impl TrustPolicy {
     }
 
     /// Verify if a child header is trusted according to this policy
-    pub fn verify_child_header(&self, epoch: i64, cid: &Cid) -> Result<bool> {
+    pub fn verify_child_header(&self, epoch: i64, _cid: &Cid) -> Result<bool> {
         match self {
             Self::AcceptAll => Ok(true),
 

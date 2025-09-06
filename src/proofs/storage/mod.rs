@@ -4,6 +4,7 @@ pub mod generator;
 pub mod utils;
 pub mod verifier;
 
+// Internal exports - only expose what's needed by other modules
 pub use bundle::StorageProof;
 pub use generator::generate_storage_proof;
 pub use utils::{calculate_storage_slot, compute_mapping_slot};
