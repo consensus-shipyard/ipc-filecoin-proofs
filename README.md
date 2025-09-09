@@ -409,12 +409,6 @@ event NewTopDownMessage(bytes32 indexed subnetId, uint256 nonce);
 - [ ] Implement witness caching across blocks
 - [ ] Add metrics and observability
 
-### Long Term
-
-- [ ] zk-SNARK proof compression
-- [ ] Light client integration
-- [ ] WebAssembly verification
-- [ ] Incremental proof updates
 
 ## Conclusion
 
