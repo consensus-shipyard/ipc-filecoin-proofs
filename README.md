@@ -1,5 +1,96 @@
 # Filecoin/IPC Merkle Proof System - Technical Deep Dive
 
+## Using as a Library
+
+Add this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+proofs = { git = "https://github.com/protocol-labs/proofs" }
+# Or from crates.io once published:
+# proofs = "0.1.0"
+```
+
+### Quick Start Example
+
+```rust
+use proofs::{
+    LotusClient,
+    generate_proof_bundle, verify_proof_bundle,
+    EventProofSpec, StorageProofSpec, TrustPolicy,
+    calculate_storage_slot, create_event_filter,
+    resolve_eth_address_to_actor_id,
+};
+use url::Url;
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Initialize a Lotus RPC client
+    let client = LotusClient::new(
+        Url::parse("https://api.calibration.node.glif.io/rpc/v1")?,
+        None,  // Optional auth token
+    );
+
+    // Get tipsets at specific height
+    let height = 2992953;
+    let parent = client.request("Filecoin.ChainGetTipSetByHeight", json!([height, null])).await?;
+    let child = client.request("Filecoin.ChainGetTipSetByHeight", json!([height + 1, null])).await?;
+
+    // Configure what to prove
+    let actor_id = resolve_eth_address_to_actor_id(
+        &client,
+        "0x52f864e96e8c85836c2df262ae34d2dc4df5953a"
+    ).await?;
+
+    // Storage proof specification
+    let storage_specs = vec![
+        StorageProofSpec {
+            actor_id,
+            slot: calculate_storage_slot("calib-subnet-1", 0),
+        }
+    ];
+
+    // Event proof specification
+    let event_specs = vec![
+        EventProofSpec {
+            event_signature: "NewTopDownMessage(bytes32,uint256)".to_string(),
+            topic_1: "calib-subnet-1".to_string(),
+            actor_id_filter: Some(actor_id),
+        }
+    ];
+
+    // Generate the proof bundle
+    let bundle = generate_proof_bundle(
+        &client,
+        &parent,
+        &child,
+        storage_specs,
+        event_specs
+    ).await?;
+
+    // Verify the proof
+    let trust_policy = TrustPolicy::accept_all();  // Use F3 certificates in production
+    let event_filter = create_event_filter(
+        "NewTopDownMessage(bytes32,uint256)",
+        "calib-subnet-1"
+    );
+
+    let results = verify_proof_bundle(&bundle, &trust_policy, Some(&event_filter))?;
+
+    println!("Verification successful: {}", results.all_valid());
+    Ok(())
+}
+```
+
+### Running the Example Binary
+
+The repository includes a complete example binary that you can run:
+
+```bash
+cargo run --bin proofs
+```
+
 ## The Problem: Cross-Chain State Verification
 
 IPC subnets need to verify state changes and events from parent Filecoin chains without trusting intermediaries. This requires generating cryptographic proofs that can be verified offline using only a minimal set of witness data.

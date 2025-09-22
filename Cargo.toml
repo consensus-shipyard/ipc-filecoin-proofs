@@ -3,8 +3,15 @@ name = "proofs"
 version = "0.1.0"
 edition = "2021"
 authors = ["Protocol Labs"]
-description = "Proofs crate for IPC project"
+description = "Proofs library and tools for IPC project - generates and verifies storage and event proofs"
 license = "MIT"
+repository = "https://github.com/protocol-labs/proofs"
+keywords = ["ipc", "proofs", "filecoin", "blockchain", "verification"]
+categories = ["cryptography", "network-programming"]
+
+[lib]
+name = "proofs"
+path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1.0"
