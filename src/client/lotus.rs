@@ -21,8 +21,14 @@ pub struct LotusClient {
 impl LotusClient {
     /// Creates a new Lotus client that sends requests to `url`
     pub fn new(url: Url, bearer_token: Option<&str>) -> Self {
+        // Build client without proxy detection to avoid macOS system-configuration panic
+        let http_client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::default());
+        
         Self {
-            http_client: reqwest::Client::default(),
+            http_client,
             url,
             bearer_token: bearer_token.map(String::from),
         }
