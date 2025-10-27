@@ -26,7 +26,7 @@ impl LotusClient {
             .no_proxy()
             .build()
             .unwrap_or_else(|_| reqwest::Client::default());
-        
+
         Self {
             http_client,
             url,
