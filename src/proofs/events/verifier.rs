@@ -9,7 +9,7 @@ use serde_ipld_dagcbor;
 
 use crate::proofs::common::{
     decode::HeaderLite,
-    evm::{ascii_to_bytes32, extract_evm_log, hash_event_signature},
+    evm::{extract_evm_log, hash_event_signature, parse_topic_filter},
     witness::parse_cids,
 };
 use crate::proofs::events::{
@@ -27,11 +27,17 @@ use crate::proofs::events::{
 /// A closure that checks if an event matches the criteria
 pub fn create_event_filter(event_sig: &str, subnet_id: &str) -> impl Fn(&ActorEvent) -> bool {
     let t0: [u8; 32] = hash_event_signature(event_sig);
-    let t1: [u8; 32] = ascii_to_bytes32(subnet_id);
+    let t1 = parse_topic_filter(subnet_id);
 
     move |ev| {
         if let Some(log) = extract_evm_log(ev) {
-            log.topics.len() >= 2 && log.topics[0] == t0 && log.topics[1] == t1
+            if log.topics.is_empty() || log.topics[0] != t0 {
+                return false;
+            }
+            if let Some(v) = t1 {
+                return log.topics.len() >= 2 && log.topics[1] == v;
+            }
+            true
         } else {
             false
         }

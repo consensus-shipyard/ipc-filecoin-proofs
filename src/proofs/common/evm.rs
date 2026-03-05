@@ -77,6 +77,36 @@ pub fn ascii_to_bytes32(s: &str) -> [u8; 32] {
     out
 }
 
+/// Parse a topic filter string into an EVM topic value.
+///
+/// Supported formats:
+/// - empty string: no topic1 filter
+/// - `0x` + 40 hex chars: EVM address (left-padded to 32 bytes)
+/// - `0x` + 64 hex chars: raw bytes32
+/// - otherwise: ASCII bytes32 (right-padded)
+pub fn parse_topic_filter(topic: &str) -> Option<[u8; 32]> {
+    let t = topic.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if let Some(hex) = t.strip_prefix("0x") {
+        if hex.len() == 40 {
+            let mut addr = [0u8; 20];
+            if hex::decode_to_slice(hex, &mut addr).is_ok() {
+                let mut out = [0u8; 32];
+                out[12..].copy_from_slice(&addr);
+                return Some(out);
+            }
+        } else if hex.len() == 64 {
+            let mut out = [0u8; 32];
+            if hex::decode_to_slice(hex, &mut out).is_ok() {
+                return Some(out);
+            }
+        }
+    }
+    Some(ascii_to_bytes32(t))
+}
+
 /// General Keccak256 hash function
 pub fn keccak256(bytes: impl AsRef<[u8]>) -> [u8; 32] {
     let mut h = Keccak256::new();

@@ -11,7 +11,7 @@ use crate::client::types::{ApiReceipt, ApiTipset, CIDMap};
 use crate::client::LotusClient;
 use crate::proofs::common::{
     blockstore::RecordingBlockStore,
-    evm::{ascii_to_bytes32, extract_evm_log, hash_event_signature},
+    evm::{extract_evm_log, hash_event_signature, parse_topic_filter},
     witness::{parse_cid, WitnessCollector},
 };
 use crate::proofs::events::{
@@ -22,7 +22,7 @@ use crate::proofs::events::{
 /// Event matcher for filtering events by signature and topic
 struct EventMatcher {
     topic0: [u8; 32],
-    topic1: [u8; 32],
+    topic1: Option<[u8; 32]>,
 }
 
 impl EventMatcher {
@@ -30,13 +30,19 @@ impl EventMatcher {
     fn new(event_signature: &str, topic_1: &str) -> Self {
         Self {
             topic0: hash_event_signature(event_signature),
-            topic1: ascii_to_bytes32(topic_1),
+            topic1: parse_topic_filter(topic_1),
         }
     }
 
     /// Check if an EVM log matches our criteria
     fn matches_log(&self, log: &crate::proofs::common::evm::EvmLog) -> bool {
-        log.topics.len() >= 2 && log.topics[0] == self.topic0 && log.topics[1] == self.topic1
+        if log.topics.is_empty() || log.topics[0] != self.topic0 {
+            return false;
+        }
+        if let Some(t1) = self.topic1 {
+            return log.topics.len() >= 2 && log.topics[1] == t1;
+        }
+        true
     }
 }
 
